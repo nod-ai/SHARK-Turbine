@@ -61,31 +61,32 @@ class VaeModel(torch.nn.Module):
         custom_vae="",
     ):
         super().__init__()
-        self.model = None
+        self.vae = None
+        self.base_vae = False
         if custom_vae == "":
-            self.model = AutoencoderKL.from_pretrained(
+            self.vae = AutoencoderKL.from_pretrained(
                 hf_model_name,
                 subfolder="vae",
             )
         elif not isinstance(custom_vae, dict):
             try:
                 # custom HF repo with no vae subfolder
-                self.model = AutoencoderKL.from_pretrained(
+                self.vae = AutoencoderKL.from_pretrained(
                     custom_vae,
                 )
             except:
                 # some larger repo with vae subfolder
-                self.model = AutoencoderKL.from_pretrained(
+                self.vae = AutoencoderKL.from_pretrained(
                     custom_vae,
                     subfolder="vae",
                 )
         else:
             # custom vae as a HF state dict
-            self.model = AutoencoderKL.from_pretrained(
+            self.vae = AutoencoderKL.from_pretrained(
                 hf_model_name,
                 subfolder="vae",
             )
-            self.model.load_state_dict(custom_vae)
+            self.vae.load_state_dict(custom_vae)
 
     def decode_inp(self, inp):
         if not self.base_vae:
@@ -127,7 +128,7 @@ def export_vae_model(
     class CompiledVae(CompiledModule):
         params = export_parameters(vae_model)
 
-        def main(self, inp=AbstractTensor(*sample, dtype=torch.float32)):
+        def main(self, inp=AbstractTensor(*sample, dtype=dtype)):
             if variant == "decode":
                 return jittable(vae_model.decode_inp)(inp)
             elif variant == "encode":
