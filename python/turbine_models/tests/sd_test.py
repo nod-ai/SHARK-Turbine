@@ -27,6 +27,9 @@ arguments = {
     "batch_size": 1,
     "height": 512,
     "width": 512,
+    "precision": "fp32",
+    "max_length": 77,
+    "guidance_scale": 7.5,
     "run_vmfb": True,
     "compile_to": None,
     "external_weight_path": "",
@@ -93,6 +96,8 @@ class StableDiffusionTest(unittest.TestCase):
                 arguments["batch_size"],
                 arguments["height"],
                 arguments["width"],
+                arguments["precision"],
+                arguments["max_length"],
                 None,
                 "vmfb",
                 "safetensors",
@@ -102,21 +107,24 @@ class StableDiffusionTest(unittest.TestCase):
         self.assertEqual(cm.exception.code, None)
         arguments["external_weight_path"] = "stable_diffusion_v1_4_unet.safetensors"
         arguments["vmfb_path"] = "stable_diffusion_v1_4_unet.vmfb"
+        dtype = torch.float16 if arguments["precision"] == "fp16" else torch.float32
         sample = torch.rand(
             arguments["batch_size"],
             arguments["in_channels"],
             arguments["height"] // 8,
             arguments["width"] // 8,
-            dtype=torch.float32,
+            dtype=dtype,
         )
-        timestep = torch.zeros(1, dtype=torch.float32)
-        encoder_hidden_states = torch.rand(2, 77, 768, dtype=torch.float32)
+        timestep = torch.zeros(1, dtype=dtype)
+        encoder_hidden_states = torch.rand(2, 77, 768, dtype=dtype)
+        guidance_scale = torch.Tensor([arguments["guidance_scale"]]).to(dtype)
 
         turbine = unet_runner.run_unet(
             arguments["device"],
             sample,
             timestep,
             encoder_hidden_states,
+            guidance_scale,
             arguments["vmfb_path"],
             arguments["hf_model_name"],
             arguments["hf_auth_token"],
@@ -128,6 +136,7 @@ class StableDiffusionTest(unittest.TestCase):
             sample,
             timestep,
             encoder_hidden_states,
+            guidance_scale,
         )
         err = utils.largest_error(torch_output, turbine)
         assert err < 9e-5
@@ -143,6 +152,7 @@ class StableDiffusionTest(unittest.TestCase):
                 arguments["batch_size"],
                 arguments["height"],
                 arguments["width"],
+                arguments["precision"],
                 None,
                 "vmfb",
                 "safetensors",
@@ -153,12 +163,13 @@ class StableDiffusionTest(unittest.TestCase):
         self.assertEqual(cm.exception.code, None)
         arguments["external_weight_path"] = "stable_diffusion_v1_4_vae.safetensors"
         arguments["vmfb_path"] = "stable_diffusion_v1_4_vae.vmfb"
+        dtype = torch.float16 if arguments["precision"] == "fp16" else torch.float32
         example_input = torch.rand(
             arguments["batch_size"],
             4,
             arguments["height"] // 8,
             arguments["width"] // 8,
-            dtype=torch.float32,
+            dtype=dtype,
         )
         turbine = vae_runner.run_vae(
             arguments["device"],
