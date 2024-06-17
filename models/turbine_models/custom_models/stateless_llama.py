@@ -452,8 +452,6 @@ def export_transformer_model(
         if streaming_llm:
             print("Compiling with Streaming LLM")
             inst = StreamingStateUpdateModule(context=Context(), import_to=import_to)
-            import pdb
-            pdb.set_trace()
         else:
             inst = StateUpdateModule(context=Context(), import_to=import_to)
         # TODO: Integrate with external parameters to actually be able to run

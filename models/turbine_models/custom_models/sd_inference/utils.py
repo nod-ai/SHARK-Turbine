@@ -3,6 +3,7 @@ import iree.compiler as ireec
 import numpy as np
 import os
 import safetensors
+import safetensors.numpy as safe_numpy
 import re
 from diffusers import (
     PNDMScheduler,
@@ -11,6 +12,17 @@ from diffusers import (
     # DPMSolverSDEScheduler,
 )
 
+_IREE_DEVICE_MAP = {
+    "cpu": "local-task",
+    "cpu-task": "local-task",
+    "cpu-sync": "local-sync",
+    "cuda": "cuda",
+    "vulkan": "vulkan",
+    "metal": "metal",
+    "rocm": "rocm",
+    "hip": "hip",
+    "intel-gpu": "level_zero",
+}
 # If flags are verified to work on a specific model and improve performance without regressing numerics, add them to this dictionary. If you are working with bleeding edge flags, please add them manually with the --ireec_flags argument.
 MI_flags = {
     "all": [
@@ -56,7 +68,7 @@ GFX11_flags = {
         "--iree-codegen-gpu-native-math-precision=true",
         "--iree-codegen-llvmgpu-use-vector-distribution=true",
         "--iree-codegen-llvmgpu-enable-transform-dialect-jit=false",
-        "--iree-preprocessing-pass-pipeline=builtin.module(iree-preprocessing-transpose-convolution-pipeline, iree-global-opt-raise-special-ops, util.func(iree-preprocessing-pad-to-intrinsics))",
+        "--iree-preprocessing-pass-pipeline=builtin.module(iree-preprocessing-transpose-convolution-pipeline, iree-global-opt-raise-special-ops, util.func(iree-preprocessing-pad-to-intrinsics, iree-linalg-ext-pad-attention{pad-to-multiple-of=0,64,0,32,0}))",
     ],
     "unet": [""],
     "clip": [""],
@@ -65,7 +77,6 @@ GFX11_flags = {
 }
 znver4_flags = {
     "all": [
-        # "--iree-preprocessing-pass-pipeline=builtin.module(util.func(iree-linalg-ext-convert-conv2d-to-winograd{replace-all-convs=true},iree-global-opt-demote-contraction-inputs-to-bf16))",
         "--iree-llvmcpu-target-cpu=znver4",
         "--iree-opt-const-eval=false",
         "--iree-llvmcpu-enable-ukernels=mmt4d,pack,unpack",
@@ -73,7 +84,28 @@ znver4_flags = {
         "--iree-opt-const-expr-max-size-increase-threshold=1000000000000000",
         "--iree-flow-enable-fuse-padding-into-linalg-consumer-ops",
     ],
+    "bf16": [
+        "--iree-preprocessing-pass-pipeline=builtin.module(util.func(iree-global-opt-demote-contraction-inputs-to-bf16))",
+    ],
+    "winograd": [
+        "--iree-preprocessing-pass-pipeline=builtin.module(util.func(iree-linalg-ext-convert-conv2d-to-winograd{replace-all-convs=true},iree-global-opt-demote-contraction-inputs-to-bf16))"
+    ],
 }
+
+
+def iree_device_map(device):
+    uri_parts = device.split("://", 2)
+    iree_driver = (
+        _IREE_DEVICE_MAP[uri_parts[0]]
+        if uri_parts[0] in _IREE_DEVICE_MAP
+        else uri_parts[0]
+    )
+    if len(uri_parts) == 1:
+        return iree_driver
+    elif "rocm" in uri_parts:
+        return "rocm"
+    else:
+        return f"{iree_driver}://{uri_parts[1]}"
 
 
 def compile_to_vmfb(
@@ -181,10 +213,12 @@ def compile_to_vmfb(
     if attn_spec in ["default", "mfma"]:
         attn_spec = get_mfma_spec_path(target_triple, os.path.dirname(safe_name))
         flags.extend(["--iree-codegen-transform-dialect-library=" + attn_spec])
-    elif attn_spec in ["wmma"] or "gfx11" in target_triple:
+    elif attn_spec in ["wmma"] or ("gfx11" in target_triple and not attn_spec):
         attn_spec = get_wmma_spec_path(target_triple, os.path.dirname(safe_name))
         if attn_spec:
             flags.extend(["--iree-codegen-transform-dialect-library=" + attn_spec])
+    elif attn_spec and attn_spec != "None":
+        flags.extend(["--iree-codegen-transform-dialect-library=" + attn_spec])
 
     for i, flag in enumerate(ireec_flags):
         k = flag.strip().split("=")[0]
@@ -270,14 +304,22 @@ def save_external_weights(
     model,
     external_weights=None,
     external_weight_file=None,
+    force_format=False,
 ):
     if external_weights is not None:
         if external_weights in ["safetensors", "irpa"]:
             mod_params = dict(model.named_parameters())
+            mod_buffers = dict(model.named_buffers())
+            mod_params.update(mod_buffers)
             for name in mod_params:
                 mapper["params." + name] = name
             if external_weight_file and not os.path.isfile(external_weight_file):
-                safetensors.torch.save_file(mod_params, external_weight_file)
+                if not force_format:
+                    safetensors.torch.save_file(mod_params, external_weight_file)
+                else:
+                    for x in mod_params.keys():
+                        mod_params[x] = mod_params[x].numpy()
+                    safe_numpy.save_file(mod_params, external_weight_file)
                 print("Saved params to", external_weight_file)
 
 
