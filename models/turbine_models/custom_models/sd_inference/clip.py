@@ -47,16 +47,42 @@ parser.add_argument("--vulkan_max_allocation", type=str, default="4294967296")
 
 def export_clip_model(
     hf_model_name,
-    hf_auth_token=None,
-    compile_to="torch",
-    external_weights=None,
-    external_weight_path=None,
-    device=None,
-    target_triple=None,
-    max_alloc=None,
-    upload_ir=False,
+    hf_auth_token: str = None,
+    max_length: int = 64,
+    precision: str = "fp16",
+    compile_to: str = "torch",
+    external_weights: str = None,
+    external_weight_path: str = None,
+    device: str = "llvm-cpu",
+    target_triple: str = "x86_64-linux-gnu",
+    ireec_flags: str = None,
+    exit_on_vmfb: bool = False,
+    pipeline_dir: str = None,
+    input_mlir: str = None,
+    td_spec: str = None,
+    weights_only: bool = False,
+    upload_ir: bool = False,
 ):
-    input_len = 77
+    input_len = max_length
+    if pipeline_dir not in [None, ""]:
+        safe_name = os.path.join(pipeline_dir, "clip")
+    else:
+        safe_name = utils.create_safe_name(
+            hf_model_name, f"_{str(max_length)}-{precision}-clip-{device}"
+        )
+    if input_mlir:
+        vmfb_path = utils.compile_to_vmfb(
+            input_mlir,
+            device,
+            target_triple,
+            ireec_flags,
+            safe_name,
+            mlir_source="file",
+            return_path=not exit_on_vmfb,
+            const_expr_hoisting=True,
+            attn_spec=td_spec,
+        )
+        return vmfb_path
     if "google/t5" in hf_model_name:
         from transformers import T5Tokenizer, T5Model
 
@@ -89,6 +115,9 @@ def export_clip_model(
     utils.save_external_weights(
         mapper, text_encoder_model, external_weights, external_weight_path
     )
+
+    if weights_only:
+        return external_weight_path
 
     if "google/t5" in hf_model_name:
 
@@ -132,38 +161,47 @@ def export_clip_model(
     inst = CompiledClip(context=Context(), import_to=import_to)
 
     module_str = str(CompiledModule.get_mlir_module(inst))
-    safe_name = utils.create_safe_name(hf_model_name, "-clip")
-    if upload_ir:
-        with open(f"{safe_name}.mlir", "w+") as f:
-            f.write(module_str)
-        model_name_upload = hf_model_name.replace("/", "_")
-        model_name_upload += "-clip"
-        blob_name = turbine_tank.uploadToBlobStorage(
-            str(os.path.abspath(f"{safe_name}.mlir")),
-            f"{model_name_upload}/{model_name_upload}.mlir",
-        )
     if compile_to != "vmfb":
         return module_str, tokenizer
     else:
-        utils.compile_to_vmfb(module_str, device, target_triple, max_alloc, safe_name)
-        if upload_ir:
-            return blob_name
+        vmfb_path = utils.compile_to_vmfb(
+            module_str,
+            device,
+            target_triple,
+            ireec_flags,
+            safe_name,
+            return_path=not exit_on_vmfb,
+            const_expr_hoisting=True,
+            attn_spec=td_spec,
+        )
+        return vmfb_path, None
 
 
 if __name__ == "__main__":
-    args = parser.parse_args()
+    from .sd_cmd_opts import args
+
     mod_str, _ = export_clip_model(
         args.hf_model_name,
-        args.hf_auth_token,
+        args.max_length,
+        args.precision,
         args.compile_to,
         args.external_weights,
         args.external_weight_path,
         args.device,
         args.iree_target_triple,
-        args.vulkan_max_allocation,
+        args.ireec_flags + args.clip_flags,
+        exit_on_vmfb=True,
+        pipeline_dir=args.pipeline_dir,
+        input_mlir=args.input_mlir,
+        td_spec=args.attn_spec,
+        weights_only=False,
+        upload_ir=False,
     )
-    safe_name = args.hf_model_name.split("/")[-1].strip()
-    safe_name = re.sub("-", "_", safe_name)
+    if args.input_mlir:
+        exit()
+    safe_name = utils.create_safe_name(
+        args.hf_model_name, f"{str(args.max_length)}_{args.precision}_clip"
+    )
     with open(f"{safe_name}.mlir", "w+") as f:
         f.write(mod_str)
     print("Saved to", safe_name + ".mlir")

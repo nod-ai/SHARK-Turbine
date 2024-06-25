@@ -46,7 +46,6 @@ default_arguments = {
     "device": "cpu",
     "rt_device": "local-task",
     "iree_target_triple": "x86_64-linux-gnu",
-    "vulkan_max_allocation": "4294967296",
     "prompt": "a photograph of an astronaut riding a horse",
     "in_channels": 4,
 }
@@ -64,13 +63,15 @@ vae_model = vae.VaeModel(
     custom_vae=None,
 )
 
-schedulers_dict = utils.get_schedulers(
-    # This is a public model, so no auth required
-    "CompVis/stable-diffusion-v1-4",
+scheduler = schedulers.get_scheduler(
+    default_arguments["hf_model_name"], default_arguments["scheduler_id"]
 )
-scheduler = schedulers_dict[default_arguments["scheduler_id"]]
-scheduler_module = schedulers.Scheduler(
-    "CompVis/stable-diffusion-v1-4", default_arguments["num_inference_steps"], scheduler
+scheduler_module = schedulers.SchedulingModel(
+    scheduler,
+    default_arguments["height"],
+    default_arguments["width"],
+    default_arguments["num_inference_steps"],
+    default_arguments["precision"],
 )
 
 
@@ -79,19 +80,19 @@ class StableDiffusionTest(unittest.TestCase):
     def testExportT5Model(self):
         current_args = copy.deepcopy(default_arguments)
         current_args["hf_model_name"] = "google/t5-v1_1-small"
-        safe_prefix = "t5_v1_1_small"
         blob_name = clip.export_clip_model(
             hf_model_name=current_args["hf_model_name"],
-            hf_auth_token=None,
+            max_length=64,
+            precision=current_args["precision"],
             compile_to="vmfb",
             external_weights=None,
             external_weight_path=None,
             device="cpu",
             target_triple=None,
-            max_alloc=None,
+            exit_on_vmfb=False,
             upload_ir=UPLOAD_IR,
         )
-        current_args["vmfb_path"] = safe_prefix + "_clip.vmfb"
+        current_args["vmfb_path"] = blob_name
         turbine = clip_runner.run_clip(
             current_args["rt_device"],
             current_args["prompt"],
@@ -119,13 +120,14 @@ class StableDiffusionTest(unittest.TestCase):
         safe_prefix = "clip_vit_large_patch14"
         blob_name = clip.export_clip_model(
             hf_model_name=current_args["hf_model_name"],
-            hf_auth_token=None,
+            max_length=64,
+            precision=current_args["precision"],
             compile_to="vmfb",
             external_weights="safetensors",
             external_weight_path=safe_prefix + ".safetensors",
             device="cpu",
             target_triple=None,
-            max_alloc=None,
+            exit_on_vmfb=False,
             upload_ir=UPLOAD_IR,
         )
         current_args["external_weight_path"] = safe_prefix + ".safetensors"
@@ -157,13 +159,15 @@ class StableDiffusionTest(unittest.TestCase):
         current_args = copy.deepcopy(default_arguments)
         current_args["hf_model_name"] = "CompVis/stable-diffusion-v1-4"
         blob_name = clip.export_clip_model(
-            # This is a public model, so no auth required
-            "CompVis/stable-diffusion-v1-4",
-            None,
-            "vmfb",
-            "safetensors",
-            "stable_diffusion_v1_4_clip.safetensors",
-            "cpu",
+            hf_model_name=current_args["hf_model_name"],
+            max_length=64,
+            precision=current_args["precision"],
+            compile_to="vmfb",
+            external_weights="safetensors",
+            external_weight_path=safe_prefix + ".safetensors",
+            device="cpu",
+            target_triple=None,
+            exit_on_vmfb=False,
             upload_ir=UPLOAD_IR,
         )
         current_args["external_weight_path"] = "stable_diffusion_v1_4_clip.safetensors"
@@ -195,7 +199,7 @@ class StableDiffusionTest(unittest.TestCase):
         current_args = copy.deepcopy(default_arguments)
         blob_name = unet.export_unet_model(
             unet_model,
-            "CompVis/stable-diffusion-v1-4",
+            current_args["hf_model_name"],
             current_args["batch_size"],
             current_args["height"],
             current_args["width"],
@@ -204,12 +208,12 @@ class StableDiffusionTest(unittest.TestCase):
             None,
             "vmfb",
             "safetensors",
-            "stable_diffusion_v1_4_unet.safetensors",
+            "stable_diffusion_unet.safetensors",
             "cpu",
             upload_ir=UPLOAD_IR,
         )
-        current_args["external_weight_path"] = "stable_diffusion_v1_4_unet.safetensors"
-        current_args["vmfb_path"] = "stable_diffusion_v1_4_unet.vmfb"
+        current_args["external_weight_path"] = "stable_diffusion_unet.safetensors"
+        current_args["vmfb_path"] = blob_name
         sample = torch.rand(
             current_args["batch_size"],
             current_args["in_channels"],
@@ -220,9 +224,13 @@ class StableDiffusionTest(unittest.TestCase):
 
         timestep = torch.zeros(1, dtype=torch.float32)
         if current_args["hf_model_name"] == "CompVis/stable-diffusion-v1-4":
-            encoder_hidden_states = torch.rand(2, 77, 768, dtype=torch.float32)
+            encoder_hidden_states = torch.rand(
+                2, current_args["max_length"], 768, dtype=torch.float32
+            )
         elif current_args["hf_model_name"] == "stabilityai/stable-diffusion-2-1-base":
-            encoder_hidden_states = torch.rand(2, 77, 1024, dtype=torch.float32)
+            encoder_hidden_states = torch.rand(
+                2, current_args["max_length"], 1024, dtype=torch.float32
+            )
         guidance_scale = torch.tensor(
             [current_args["guidance_scale"]], dtype=torch.float32
         )
@@ -252,8 +260,8 @@ class StableDiffusionTest(unittest.TestCase):
             new_blob_name = blob_name.split(".")
             new_blob_name = new_blob_name[0] + "-pass.mlir"
             turbine_tank.changeBlobName(blob_name, new_blob_name)
-        os.remove("stable_diffusion_v1_4_unet.safetensors")
-        os.remove("stable_diffusion_v1_4_unet.vmfb")
+        os.remove("stable_diffusion_unet.safetensors")
+        os.remove(blob_name)
         del torch_output
         del turbine
 
@@ -261,12 +269,11 @@ class StableDiffusionTest(unittest.TestCase):
         current_args = copy.deepcopy(default_arguments)
         blob_name = vae.export_vae_model(
             vae_model,
-            # This is a public model, so no auth required
-            "CompVis/stable-diffusion-v1-4",
+            current_args["hf_model_name"],
             current_args["batch_size"],
             current_args["height"],
             current_args["width"],
-            None,
+            current_args["precision"],
             "vmfb",
             "safetensors",
             "stable_diffusion_v1_4_vae.safetensors",
@@ -275,7 +282,7 @@ class StableDiffusionTest(unittest.TestCase):
             upload_ir=UPLOAD_IR,
         )
         current_args["external_weight_path"] = "stable_diffusion_v1_4_vae.safetensors"
-        current_args["vmfb_path"] = "stable_diffusion_v1_4_vae.vmfb"
+        current_args["vmfb_path"] = blob_name
         example_input = torch.rand(
             current_args["batch_size"],
             4,
@@ -304,14 +311,13 @@ class StableDiffusionTest(unittest.TestCase):
         del torch_output
         del turbine
         os.remove("stable_diffusion_v1_4_vae.safetensors")
-        os.remove("stable_diffusion_v1_4_vae.vmfb")
+        os.remove("blob_name")
 
     def testExportVaeModelEncode(self):
         current_args = copy.deepcopy(default_arguments)
         blob_name = vae.export_vae_model(
             vae_model,
-            # This is a public model, so no auth required
-            "CompVis/stable-diffusion-v1-4",
+            current_args["hf_model_name"],
             current_args["batch_size"],
             current_args["height"],
             current_args["width"],
@@ -324,7 +330,7 @@ class StableDiffusionTest(unittest.TestCase):
             upload_ir=UPLOAD_IR,
         )
         current_args["external_weight_path"] = "stable_diffusion_v1_4_vae.safetensors"
-        current_args["vmfb_path"] = "stable_diffusion_v1_4_vae.vmfb"
+        current_args["vmfb_path"] = blob_name
         example_input = torch.rand(
             current_args["batch_size"],
             3,
@@ -351,28 +357,27 @@ class StableDiffusionTest(unittest.TestCase):
             new_blob_name = new_blob_name[0] + "-pass.mlir"
             turbine_tank.changeBlobName(blob_name, new_blob_name)
         os.remove("stable_diffusion_v1_4_vae.safetensors")
-        os.remove("stable_diffusion_v1_4_vae.vmfb")
+        os.remove(blob_name)
 
     @unittest.expectedFailure
     def testExportPNDMScheduler(self):
         current_args = copy.deepcopy(default_arguments)
         safe_name = "stable_diffusion_v1_4_scheduler"
-        blob_name = schedulers.export_scheduler(
-            scheduler_module,
-            # This is a public model, so no auth required
-            "CompVis/stable-diffusion-v1-4",
+        blob_name = schedulers.export_scheduler_model(
+            current_args["hf_model_name"],
+            current_args["scheduler_id"],
             current_args["batch_size"],
             current_args["height"],
             current_args["width"],
-            None,
+            current_args["num_inference_steps"],
+            current_args["precision"],
             "vmfb",
-            "safetensors",
-            "stable_diffusion_v1_4_scheduler.safetensors",
-            "cpu",
+            current_args["device"],
+            current_args["iree_target_triple"],
             upload_ir=UPLOAD_IR,
         )
         current_args["external_weight_path"] = safe_name + ".safetensors"
-        current_args["vmfb_path"] = safe_name + ".vmfb"
+        current_args["vmfb_path"] = blob_name
         sample = torch.rand(
             current_args["batch_size"],
             4,
