@@ -163,7 +163,6 @@ def export_prompt_encoder(
     input_mlir=None,
     attn_spec=None,
     weights_only=False,
-
 ):
     do_classifier_free_guidance = True
 
@@ -256,7 +255,7 @@ def export_prompt_encoder(
     model_metadata_encode = {
         "model_name": hf_model_name + "_text_encoder",
         "input_shapes": [str((1, max_length)) for i in range(4)],
-        "input_dtypes": ['int64' for i in range(4)],
+        "input_dtypes": ["int64" for i in range(4)],
         "use_attention_mask": False,
     }
     module = AddMetadataPass(module, model_metadata_encode, "encode_prompts").run()
