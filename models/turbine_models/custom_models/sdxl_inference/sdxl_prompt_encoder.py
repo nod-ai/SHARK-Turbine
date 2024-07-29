@@ -277,7 +277,7 @@ def export_prompt_encoder(
     module_str = str(module)
 
     if compile_to != "vmfb":
-        return module_str
+        return module_str, None
     else:
         vmfb_path = utils.compile_to_vmfb(
             module_str,
@@ -289,7 +289,7 @@ def export_prompt_encoder(
             const_expr_hoisting=True,
             attn_spec=attn_spec,
         )
-        return vmfb_path
+        return None, vmfb_path
 
 
 if __name__ == "__main__":

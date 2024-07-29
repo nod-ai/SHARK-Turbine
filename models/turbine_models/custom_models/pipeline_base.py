@@ -671,7 +671,7 @@ class TurbinePipelineBase:
                     self.map[submodel]["export_args"]["batch_size"],
                     self.map[submodel]["export_args"]["max_length"],
                     "produce_img_split",
-                    unet_module_name = self.map["unet"]["module_name"],
+                    unet_module_name=self.map["unet"]["module_name"],
                 )
                 dims = [
                     self.map[submodel]["export_args"]["width"],

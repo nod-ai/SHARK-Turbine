@@ -727,10 +727,7 @@ class SharkSDPipeline(TurbinePipelineBase):
         for i in range(batch_count):
             if self.compiled_pipeline:
                 image = produce_images_compiled(
-                    samples[i],
-                    prompt_embeds,
-                    negative_embeds,
-                    guidance_scale
+                    samples[i], prompt_embeds, negative_embeds, guidance_scale
                 )
             else:
                 produce_latents_input = [
