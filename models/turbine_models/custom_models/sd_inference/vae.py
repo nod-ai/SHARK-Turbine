@@ -98,6 +98,7 @@ class SD3VaeModel(torch.nn.Module):
         return latent
 
 
+@torch.no_grad()
 def export_vae_model(
     hf_model_name,
     batch_size,
@@ -167,12 +168,12 @@ def export_vae_model(
     if weights_only:
         return external_weight_path
 
-    input_image_shape = (height, width, 3)
+    input_image_shape = (batch_size, 3, height, width)
     input_latents_shape = (batch_size, num_channels, height // 8, width // 8)
     encode_args = [
         torch.empty(
             input_image_shape,
-            dtype=torch.float32,
+            dtype=dtype,
         )
     ]
     decode_args = [
@@ -195,9 +196,12 @@ def export_vae_model(
         fxb = FxProgramsBuilder(vae_model)
 
         # TODO: fix issues with exporting the encode function.
-        # @fxb.export_program(args=(encode_args,))
-        # def _encode(module, inputs,):
-        #     return module.encode(*inputs)
+        @fxb.export_program(args=(encode_args,))
+        def _encode(
+            module,
+            inputs,
+        ):
+            return module.encode(*inputs)
 
         @fxb.export_program(args=(decode_args,))
         def _decode(module, inputs):
@@ -205,6 +209,7 @@ def export_vae_model(
 
         class CompiledVae(CompiledModule):
             decode = _decode
+            encode = _encode
 
         if external_weights:
             externalize_module_parameters(vae_model)
@@ -228,6 +233,7 @@ def export_vae_model(
         "output_dtypes": [np_dtype],
     }
     module = AddMetadataPass(module, model_metadata_decode, "decode").run()
+    module = AddMetadataPass(module, model_metadata_decode, "encode").run()
 
     if compile_to != "vmfb":
         return str(module)

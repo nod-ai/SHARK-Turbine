@@ -92,11 +92,11 @@ def get_punet_model(hf_model_name, external_weight_path, precision="i8"):
     if precision == "i8":
         repo_id = "amd-shark/sdxl-quant-models"
         subfolder = "unet/int8"
-        revision = "942e771bf0c2657a8b33380103d04747a75dfa4a"
+        revision = "4d4f95554bb991b95eb8ae4d57b38eb139b3e23f"
     elif precision in ["fp16", "fp32"]:
         repo_id = hf_model_name
         subfolder = "unet"
-        revision = "76d28af79639c28a79fa5c6c6468febd3490a37e"
+        revision = "d30d6ff79abb584bf2addc7866738df5242f315a"
 
     def download(filename):
         return hf_hub_download(
@@ -182,12 +182,13 @@ def export_unet_model(
         submodel_name = "punet"
     else:
         submodel_name = "unet"
-    if (not decomp_attn) and use_punet:
-        attn_spec = "punet"
-    elif (not decomp_attn) and "gfx9" in target:
-        attn_spec = "mfma"
-    elif (not decomp_attn) and "gfx11" in target:
-        attn_spec = "wmma"
+    if not attn_spec:
+        if (not decomp_attn) and use_punet:
+            attn_spec = "punet"
+        elif (not decomp_attn) and "gfx9" in target:
+            attn_spec = "mfma"
+        elif (not decomp_attn) and "gfx11" in target:
+            attn_spec = "wmma"
     safe_name = utils.create_safe_name(
         hf_model_name,
         f"_bs{batch_size}_{max_length}_{height}x{width}_{precision}_{submodel_name}",
@@ -208,6 +209,7 @@ def export_unet_model(
             mlir_source="file",
             return_path=not exit_on_vmfb,
             attn_spec=attn_spec,
+            flagset_keywords=["punet"] if use_punet else [],
         )
         return vmfb_path
     elif use_punet:
@@ -340,6 +342,7 @@ def export_unet_model(
             safe_name,
             return_path=True,
             attn_spec=attn_spec,
+            flagset_keywords=["punet"] if use_punet else [],
         )
         if exit_on_vmfb:
             exit()
