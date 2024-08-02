@@ -54,7 +54,6 @@ class TextEncoderModule(torch.nn.Module):
     @torch.no_grad()
     def __init__(
         self,
-        batch_size=1,
     ):
         super().__init__()
         self.dtype = torch.float16
@@ -89,7 +88,6 @@ class TextEncoderModule(torch.nn.Module):
             load_into(f, self.t5xxl.transformer, "", "cpu", self.dtype)
 
         self.do_classifier_free_guidance = True
-        self.batch_size = batch_size
 
     def get_cond(self, tokens_l, tokens_g, tokens_t5xxl):
         l_out, l_pooled = self.clip_l.forward(tokens_l)
@@ -121,7 +119,7 @@ def export_text_encoders(
     external_weights=None,
     external_weight_path=None,
     device=None,
-    target_triple=None,
+    target=None,
     ireec_flags=None,
     exit_on_vmfb=False,
     pipeline_dir=None,
@@ -134,6 +132,8 @@ def export_text_encoders(
         hf_model_name,
         f"_bs{batch_size}_{str(max_length)}_{precision}_text_encoders",
     )
+    if decomp_attn:
+        safe_name += "_decomp_attn"
     if pipeline_dir:
         safe_name = os.path.join(pipeline_dir, safe_name)
 
@@ -141,7 +141,7 @@ def export_text_encoders(
         vmfb_path = utils.compile_to_vmfb(
             input_mlir,
             device,
-            target_triple,
+            target,
             ireec_flags,
             safe_name,
             mlir_source="file",
@@ -150,9 +150,7 @@ def export_text_encoders(
             attn_spec=attn_spec,
         )
         return vmfb_path
-    model = TextEncoderModule(
-        batch_size=batch_size,
-    )
+    model = TextEncoderModule(hf_model_name)
     mapper = {}
 
     assert (
@@ -212,7 +210,7 @@ def export_text_encoders(
         vmfb_path = utils.compile_to_vmfb(
             module_str,
             device,
-            target_triple,
+            target,
             ireec_flags,
             safe_name,
             return_path=not exit_on_vmfb,
